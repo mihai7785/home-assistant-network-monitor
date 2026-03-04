@@ -1,24 +1,48 @@
 import platform
 import scapy.all as scapy
-import json
 import os
 import socket
 import threading
+import requests
 from influxdb_client import InfluxDBClient, Point, WriteOptions
 from dotenv import load_dotenv
 import time
 from influxdb_client import QueryApi
 
 
-
 # Load environment variables from .env
 load_dotenv()
 
-# Use the environment variables
+# InfluxDB
 INFLUX_URL = os.getenv("INFLUX_URL", "http://homeassistant.local:8086")
 INFLUX_TOKEN = os.getenv("INFLUX_TOKEN")
 INFLUX_ORG = os.getenv("INFLUX_ORG", "home_assistant")
 INFLUX_BUCKET = os.getenv("INFLUX_BUCKET", "network_monitor")
+
+# Home Assistant
+HA_URL = os.getenv("HA_URL", "http://homeassistant.local:8123")
+HA_TOKEN = os.getenv("HA_TOKEN")
+
+
+def notify_home_assistant(title, message):
+    """Sends a persistent notification to Home Assistant via the REST API."""
+    if not HA_TOKEN:
+        print("⚠️  HA_TOKEN not set, skipping Home Assistant notification.")
+        return
+
+    url = f"{HA_URL}/api/services/persistent_notification/create"
+    headers = {
+        "Authorization": f"Bearer {HA_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {"title": title, "message": message}
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=5)
+        response.raise_for_status()
+        print(f"✅ Home Assistant notified: {title}")
+    except requests.RequestException as e:
+        print(f"❌ Failed to notify Home Assistant: {e}")
 
 
 def detect_network_changes(devices):
@@ -128,14 +152,14 @@ def scan_network(ip_range="192.168.1.1/24", resolve_hostnames=False):
         })
 
     return devices
-      
+
 
 if __name__ == "__main__":
     devices = scan_network(resolve_hostnames=False)
-    
+
     for device in devices:
         print(f"IP: {device['ip']}, MAC: {device['mac']}")
-    
+
     # Store scan in InfluxDB
     write_to_influx(devices)
 
@@ -144,6 +168,14 @@ if __name__ == "__main__":
 
     if new_devices:
         print(f"🔔 New Devices Detected: {new_devices}")
+        notify_home_assistant(
+            title="Network Monitor: New Device",
+            message=f"New device(s) joined the network: {', '.join(new_devices)}",
+        )
+
     if missing_devices:
         print(f"⚠️ Missing Devices: {missing_devices}")
-
+        notify_home_assistant(
+            title="Network Monitor: Device Offline",
+            message=f"Device(s) no longer visible: {', '.join(missing_devices)}",
+        )
